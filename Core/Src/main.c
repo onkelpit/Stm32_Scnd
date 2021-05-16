@@ -179,6 +179,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart) {
 double getTempInCelsius(double raw) {
     double log_r = log(raw);
     double log_3r = log_r * log_r * log_r;
+	(void)log_3r;
+	return 0.0;
 }
 /* USER CODE END 4 */
 

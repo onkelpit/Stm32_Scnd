@@ -50,21 +50,22 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-
+const uint16_t BME_ADDR = (0x76 << 1);
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-
+double getTempInCelsius(uint16_t raw);
+double getTempInKelvin(uint16_t raw);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 uint8_t myTxData[13] = "Hello World\r\n";
 uint8_t myRxData[11];
-uint16_t raw;
-char msg[10];
+uint32_t raw;
+char msg[16];
 /* USER CODE END 0 */
 
 /**
@@ -104,6 +105,7 @@ int main(void)
   MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
   HAL_UART_Receive_DMA(&huart2, myRxData, 11);
+  HAL_ADCEx_Calibration_Start(&hadc1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -114,12 +116,26 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
       //HAL_UART_Transmit(&huart2, myTxData, 13, 10);
-      HAL_ADC_Start(&hadc1);
-      HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-      raw = HAL_ADC_GetValue(&hadc1);
-      sprintf(msg, "%hu\r\n", raw);
-      HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 10);
-      HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+      /* HAL_ADC_Start_DMA(&hadc1, &raw, 1); */
+      //HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+      //raw = HAL_ADC_GetValue(&hadc1);
+      HAL_StatusTypeDef ret;
+      uint8_t buf[2] = {0};
+      //ret = HAL_I2C_Mem_Read(&hi2c1, BME_ADDR, 0xD0, 1, buf, 1, HAL_MAX_DELAY);
+      char msg2[64] = {0};
+      //sprintf(msg2, "0x%x (%d)\r\n", buf[0], ret);
+      //HAL_UART_Transmit(&huart2, (uint8_t*)msg2, strlen(msg2), 10);
+      buf[0] = 0xd0;
+      ret = HAL_I2C_Master_Transmit(&hi2c1, BME_ADDR, buf, 1, HAL_MAX_DELAY);
+      if ( ret != HAL_OK ) {
+          sprintf(msg2, "UART ERROR\r\n");
+          HAL_UART_Transmit(&huart2, (uint8_t*)msg2, strlen(msg2), 10);
+      } else {
+          buf[0] = 0;
+      ret = HAL_I2C_Master_Receive(&hi2c1, BME_ADDR, buf, 1, HAL_MAX_DELAY);
+          sprintf(msg2, "0x%x\r\n", buf[0]);
+          HAL_UART_Transmit(&huart2, (uint8_t*)msg2, strlen(msg2), 10);
+      }
       HAL_Delay(500);
   }
   /* USER CODE END 3 */
@@ -157,7 +173,7 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV16;
 
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
   {
@@ -165,7 +181,7 @@ void SystemClock_Config(void)
   }
   PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_RTC|RCC_PERIPHCLK_ADC;
   PeriphClkInit.RTCClockSelection = RCC_RTCCLKSOURCE_LSI;
-  PeriphClkInit.AdcClockSelection = RCC_ADCPCLK2_DIV6;
+  PeriphClkInit.AdcClockSelection = RCC_ADCPCLK2_DIV8;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
@@ -176,12 +192,48 @@ void SystemClock_Config(void)
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart) {
     HAL_UART_Transmit(&huart2, myRxData, 11, 10);
 }
-double getTempInCelsius(double raw) {
-    double log_r = log(raw);
+double getTempInKelvin(uint16_t raw) {
+    double resistance = 10000.0;
+    double a = 1.129148e-3;
+    double b = 2.34125e-4;
+    double c = 8.76741e-8;
+    double voltage = raw / 4096 * 3.3;
+    double r2 = ((4096*resistance/raw)-resistance);
+    double log_r = log(r2);
     double log_3r = log_r * log_r * log_r;
-	(void)log_3r;
-	return 0.0;
+    double K = 9.5;
+    double tempInKelvin = (1/(a+b*log_r + c*log_3r))-voltage*voltage/(K*resistance);
+    return tempInKelvin;
 }
+double getTempInCelsius(uint16_t raw) {
+    //double tempInCelsius = getTempInKelvin(raw) - 273.15;
+    double Vin= 3.3;
+    double Vout= 0;
+    double R1= 10000; //change to your system
+    double Ro= 10000; //change to your system
+    double R2= 0;
+    double ratio= 0;
+    double Temp = 0;
+    double Beta = 3950; //change to your system
+    double To = 298.15;
+    ratio = raw * Vin;
+    Vout = (ratio)/4096.0;
+    ratio = (Vin/Vout) -1;
+    R2 = R1 *ratio;
+    Temp = Beta/log(R2/(Ro*exp(-Beta/To)));
+    Temp -= 273.15;
+	return Temp;
+}
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
+      sprintf(msg, "%lu\r\n", raw);
+      HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 10);
+      sprintf(msg, "%4.2fC\r\n", getTempInCelsius(raw));
+      HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 10);
+      sprintf(msg, "%4.2fK\r\n", getTempInKelvin(raw));
+      HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 10);
+      HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+}
+
 /* USER CODE END 4 */
 
 /**
